@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XML Extractor · M&amp;E Coding kobo</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+:root{--bg:#f3f5f1;--card:#fff;--ink:#17231c;--mut:#5c6b62;--line:#d5dcd3;--acc:#1f6f54;--accink:#fff;--warn:#a85a00;--ok:#1f6f54}
+@media(prefers-color-scheme:dark){:root{--bg:#121a15;--card:#1a251e;--ink:#e8efe9;--mut:#9fb0a5;--line:#2c3b32;--acc:#5fc79c;--accink:#0d1b14;--warn:#e8a050;--ok:#5fc79c}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 "Segoe UI",system-ui,sans-serif}
+header{padding:2.2rem 1.2rem 1rem;max-width:920px;margin:auto}
+h1{font:700 2.1rem/1.1 Georgia,"Times New Roman",serif;margin:0 0 .4rem;letter-spacing:-.01em}
+header p{margin:0;color:var(--mut);max-width:62ch}
+main{max-width:920px;margin:auto;padding:0 1.2rem 3rem}
+section{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--acc);border-radius:6px;padding:1.2rem 1.3rem;margin:1rem 0}
+h2{font:600 1.15rem Georgia,serif;margin:0 0 .3rem}
+.hint{color:var(--mut);font-size:.9rem;margin:.2rem 0 .8rem}
+input[type=file]{display:block;width:100%;padding:.7rem;border:1.5px dashed var(--line);border-radius:6px;background:transparent;color:var(--ink);margin-bottom:.6rem}
+input[type=text]{padding:.6rem;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);width:100%}
+label.f{display:block;font-weight:600;font-size:.9rem;margin-bottom:.2rem}
+.grid{display:grid;grid-template-columns:2fr 1fr;gap:1rem}
+@media(max-width:560px){.grid{grid-template-columns:1fr}}
+.opts{margin-top:.8rem;display:flex;gap:1.2rem;flex-wrap:wrap;font-size:.92rem}
+button{background:var(--acc);color:var(--accink);border:0;border-radius:6px;padding:.7rem 1.3rem;font:600 1rem inherit;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+button:disabled{opacity:.5;cursor:not-allowed}
+.stat{margin:.6rem 0 0;font-size:.92rem}.ok{color:var(--ok)}.warn{color:var(--warn)}
+.scroll{max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:6px;margin-top:.6rem}
+table{width:100%;border-collapse:collapse;font-size:.86rem}
+th,td{text-align:left;padding:.35rem .6rem;border-bottom:1px solid var(--line)}
+th{position:sticky;top:0;background:var(--card)}
+td+td{font-family:Consolas,monospace;word-break:break-all}
+.row{display:flex;gap:.8rem;flex-wrap:wrap;align-items:center;margin-top:.8rem}
+</style>
+</head>
+<body>
+<header>
+<h1>XML Extractor</h1>
+<p>Part of M&amp;E Coding kobo. Search zip files, nested zips, folders and loose files for names and extensions you choose, then download only the matches. Everything stays in your browser.</p>
+</header>
+<main>
+
+<section>
+<h2>1. Add files</h2>
+<p class="hint">Choose zip files or regular files (several at once), or a whole folder. Folders, subfolders and zips inside zips are all searched.</p>
+<label class="f" for="files">Zip or regular files</label>
+<input type="file" id="files" multiple>
+<label class="f" for="dir">Or a folder</label>
+<input type="file" id="dir" webkitdirectory multiple>
+<p class="stat" id="loadStat"></p>
+</section>
+
+<section>
+<h2>2. Say what to extract</h2>
+<div class="grid">
+<div><label class="f" for="name">File name contains</label>
+<input type="text" id="name" value="UNOCHA" placeholder="e.g. UNOCHA (separate several words with commas)"></div>
+<div><label class="f" for="ext">Extension</label>
+<input type="text" id="ext" value=".xml" placeholder="e.g. .xml (blank = any)"></div>
+</div>
+<div class="opts">
+<label><input type="checkbox" id="case"> Match upper/lower case exactly</label>
+<label><input type="checkbox" id="flat" checked> Put all extracted files in one folder</label>
+</div>
+<p class="stat" id="matchStat"></p>
+</section>
+
+<section id="resSec" hidden>
+<h2>3. Matches</h2>
+<p class="hint">Untick any file you don't want, then download.</p>
+<div class="scroll"><table><thead><tr><th><input type="checkbox" id="all" checked aria-label="Select all"></th><th>Location</th></tr></thead><tbody id="body"></tbody></table></div>
+<div class="row"><button id="go">Download ZIP of selected files</button><span class="stat" id="outStat"></span></div>
+</section>
+</main>
+
+<script>
+const $=s=>document.querySelector(s);
+let ALL=[],matches=[];
+
+async function walkZip(zip,base,depth){
+  for(const e of Object.values(zip.files)){
+    if(e.dir||/(^|\/)__MACOSX\//.test(e.name)||/(^|\/)\._/.test(e.name))continue;
+    const path=base+'/'+e.name;
+    if(/\.zip$/i.test(e.name)&&depth<6){
+      try{await walkZip(await JSZip.loadAsync(await e.async('uint8array')),path,depth+1);continue}catch(_){}
+    }
+    ALL.push({path,name:e.name.split('/').pop(),get:()=>e.async('uint8array')});
+  }
+}
+async function addFiles(list){
+  ALL=[];const bad=[];
+  for(const f of list){
+    const p=f.webkitRelativePath||f.name;
+    if(/\.zip$/i.test(f.name)){
+      try{await walkZip(await JSZip.loadAsync(f),p,0)}catch(e){bad.push(f.name)}
+    }else ALL.push({path:p,name:f.name,get:()=>f.arrayBuffer().then(b=>new Uint8Array(b))});
+  }
+  $('#loadStat').innerHTML=`<span class="ok">${ALL.length} files found</span>`+(bad.length?` <span class="warn">· could not open: ${bad.join(', ')}</span>`:'');
+  filter();
+}
+function filter(){
+  const terms=$('#name').value.split(',').map(t=>t.trim()).filter(Boolean);
+  let ext=$('#ext').value.trim();if(ext&&!ext.startsWith('.'))ext='.'+ext;
+  const cs=$('#case').checked,n=x=>cs?x:x.toLowerCase();
+  matches=ALL.filter(f=>{
+    const base=n(f.name);
+    return (!ext||base.endsWith(n(ext)))&&(!terms.length||terms.some(t=>base.includes(n(t))))});
+  $('#matchStat').innerHTML=ALL.length?`<span class="${matches.length?'ok':'warn'}">${matches.length} of ${ALL.length} files match</span>`:'';
+  $('#resSec').hidden=!matches.length;
+  $('#body').innerHTML=matches.map((m,i)=>`<tr><td><input type="checkbox" data-i="${i}" checked aria-label="Select"></td><td>${m.path.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</td></tr>`).join('');
+  $('#all').checked=true;
+}
+$('#files').onchange=e=>addFiles([...e.target.files]);
+$('#dir').onchange=e=>addFiles([...e.target.files]);
+['#name','#ext'].forEach(s=>$(s).oninput=filter);$('#case').onchange=filter;
+$('#all').onchange=e=>document.querySelectorAll('#body input').forEach(c=>c.checked=e.target.checked);
+
+$('#go').onclick=async()=>{
+  const b=$('#go');b.disabled=true;
+  const sel=[...document.querySelectorAll('#body input:checked')].map(c=>matches[+c.dataset.i]);
+  if(!sel.length){$('#outStat').innerHTML='<span class="warn">Tick at least one file.</span>';b.disabled=false;return}
+  const z=new JSZip(),used={},flat=$('#flat').checked;
+  for(const m of sel){
+    let p=flat?m.name:m.path;
+    if(used[p]){const d=p.lastIndexOf('.');const k=++used[p];p=d>0?`${p.slice(0,d)}_${k}${p.slice(d)}`:`${p}_${k}`}else used[p]=1;
+    z.file(p,await m.get());
+  }
+  const a=document.createElement('a');a.href=URL.createObjectURL(await z.generateAsync({type:'blob'}));
+  a.download='extracted_files.zip';a.click();
+  $('#outStat').innerHTML=`<span class="ok">${sel.length} files extracted.</span>`;b.disabled=false;
+};
+</script>
+</body>
+</html>
